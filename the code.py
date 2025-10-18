@@ -1,89 +1,67 @@
-import streamlit as st
+from flask import Flask, request, render_template_string
 from PIL import Image
 
-# === 8 base colors ===
-base_colors = [
-    (0, 0, 0),       # 1 = black
-    (255, 0, 0),     # 2 = red
-    (0, 255, 0),     # 3 = green
-    (0, 0, 255),     # 4 = blue
-    (255, 255, 0),   # 5 = yellow
-    (255, 0, 255),   # 6 = pink
-    (0, 255, 255),   # 7 = teal
-    (255, 255, 255)  # 8 = white
-]
+app = Flask(__name__)
 
-def color_distance(c1, c2):
-    return (c1[0]-c2[0])**2 + (c1[1]-c2[1])**2 + (c1[2]-c2[2])**2
+# 🎨 Color codes
+COLOR_MAP = {
+    1: (0, 0, 0),       # black
+    2: (255, 0, 0),     # red
+    3: (0, 255, 0),     # green
+    4: (0, 0, 255),     # blue
+    5: (255, 255, 0),   # yellow
+    6: (255, 105, 180), # pink
+    7: (0, 255, 255),   # teal
+    8: (255, 255, 255)  # white
+}
 
-def find_closest_color(pixel):
-    min_dist = float('inf')
-    best_code = 1
-    for i, color in enumerate(base_colors):
-        d = color_distance(pixel, color)
-        if d < min_dist:
-            min_dist = d
-            best_code = i + 1
-    return best_code
+def closest_color(r, g, b):
+    best = None
+    best_dist = float('inf')
+    for code, (cr, cg, cb) in COLOR_MAP.items():
+        dist = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+        if dist < best_dist:
+            best = code
+            best_dist = dist
+    return best
 
-def reduce_image(img, max_pixels=10000):
-    width, height = img.size
-    total_pixels = width * height
-    if total_pixels <= max_pixels:
-        return img
-    ratio = (max_pixels / total_pixels) ** 0.5
-    new_w = int(width * ratio)
-    new_h = int(height * ratio)
-    return img.resize((new_w, new_h), Image.LANCZOS)
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file = request.files['image']
+        if not file:
+            return "No file uploaded!"
 
-def process_image(img):
-    width, height = img.size
-    total_pixels = width * height
-
-    resized = None
-    if total_pixels > 10000:
-        resized = reduce_image(img)
-        img = resized
+        img = Image.open(file)
         width, height = img.size
         total_pixels = width * height
 
-    pixels = list(img.getdata())
-    codes = [find_closest_color(p) for p in pixels]
+        # 🔽 Downscale until total pixels ≤ 10,000
+        while total_pixels > 10000:
+            img = img.resize((width // 2, height // 2))
+            width, height = img.size
+            total_pixels = width * height
 
-    latex_codes = "\\left[" + ",".join(str(c) for c in codes) + "\\right]"
-    return latex_codes, width, height, total_pixels, resized
+        pixels = img.load()
+        color_codes = []
+        for y in range(height):
+            for x in range(width):
+                r, g, b = pixels[x, y][:3]
+                color_codes.append(closest_color(r, g, b))
 
-# === STREAMLIT APP ===
-st.set_page_config(page_title="Pixel Color Coder 🎨", layout="centered")
+        # 🧾 Build LaTeX-style output
+        result = f"<h3>Width: {width}<br>Total pixels: {total_pixels}</h3>"
+        result += f"<p>\\left[{','.join(map(str, color_codes))}\\right]</p>"
+        return result
 
-st.title("🎨 Pixel Color Coder")
-st.write("Upload an image and I’ll turn it into an 8-color LaTeX-style pixel code array!")
+    # 🖼 Upload form
+    return render_template_string('''
+        <h2>🎨 Image Color Analyzer</h2>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="image" accept="image/*"><br><br>
+            <input type="submit" value="Analyze">
+        </form>
+    ''')
 
-uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
-
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert('RGB')
-    st.image(image, caption="Original Image", use_container_width=True)
-
-    latex_codes, width, height, total_pixels, resized = process_image(image)
-
-    st.subheader("🖼️ Image Info")
-    st.write(f"**Width:** {width}")
-    st.write(f"**Height:** {height}")
-    st.write(f"**Total Pixels:** {total_pixels}")
-
-    if resized:
-        st.warning("Image was resized to stay under 10,000 pixels.")
-        st.image(resized, caption="Resized Image", use_container_width=True)
-
-    st.subheader("📜 Generated Code:")
-    st.code(latex_codes, language="latex")
-
-    st.download_button(
-        label="💾 Download Code as .txt",
-        data=latex_codes,
-        file_name="pixel_codes.txt",
-        mime="text/plain"
-    )
-else:
-    st.info("👆 Upload an image to get started!")
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
